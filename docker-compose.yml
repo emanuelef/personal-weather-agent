@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    # Pull the model on startup
+    command: >
+      sh -c "ollama serve & sleep 5 && ollama pull llama3.1 && wait"
+    
+  weather-agent:
+    image: weather-agent:latest
+    container_name: weather-agent
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=llama3.1
+      - FORECAST_DAYS=15
+    # Wait for Ollama to be ready before running
+    command: >
+      sh -c "sleep 10 && ./agent"
+
+volumes:
+  ollama-data:
