@@ -4,7 +4,7 @@ A Go-based agent that fetches wind forecast data for London Heathrow Airport and
 
 ## Features
 
-- Fetches 15-day wind forecast from Open-Meteo API
+- Fetches 15-day wind forecast from Open-Meteo API (no API key required - completely free)
 - Analyzes wind patterns using local Ollama LLM
 - Provides actionable insights for airport operations
 - Containerized for easy deployment
@@ -47,13 +47,19 @@ FORECAST_DAYS=10 OLLAMA_MODEL=llama2 go run ./cmd/agent
 docker build -t weather-agent .
 ```
 
-### Run container
+### Run container with Ollama on host
 
-The agent connects to Ollama on the host machine:
+When Ollama is installed directly on the host machine (not in Docker):
 
 ```bash
-# On Linux
+# On Linux (e.g., Oracle VM)
 docker run --rm --network host weather-agent
+
+# Alternative on Linux - explicitly set host
+docker run --rm \
+  --add-host=host.docker.internal:host-gateway \
+  -e OLLAMA_HOST=http://host.docker.internal:11434 \
+  weather-agent
 
 # On macOS/Windows (use host.docker.internal)
 docker run --rm \
@@ -61,7 +67,20 @@ docker run --rm \
   weather-agent
 ```
 
-### Docker Compose (recommended)
+**For Oracle Cloud VM with Ollama installed on host:**
+The simplest approach is to use `--network host`, which allows the container to access services on the host's localhost:
+
+```bash
+docker run --rm --network host weather-agent
+```
+
+Or build and run using Make:
+```bash
+make docker-build
+docker run --rm --network host weather-agent
+```
+
+### Docker Compose (Ollama in Docker)
 
 If running Ollama in a container:
 

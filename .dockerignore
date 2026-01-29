@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github
+
+# Documentation
+README.md
+
+# Build artifacts
+agent
+*.test
+*.out
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development
+docker-compose.yml
+Makefile
