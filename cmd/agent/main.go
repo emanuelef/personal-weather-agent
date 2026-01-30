@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/joho/godotenv"
 
@@ -22,8 +21,7 @@ const (
 func main() {
 	// Load .env file if present (for local development)
 	_ = godotenv.Load()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 
 	days := getForecastDays()
 
