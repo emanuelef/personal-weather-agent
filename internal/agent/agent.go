@@ -76,10 +76,13 @@ func (a *Agent) Run(ctx context.Context) error {
 
 		location := fallbackLocation(a.cfg.LocationName)
 		report := buildForecastTable(forecast)
-		fmt.Printf("%d-day %s wind forecast (km/h):\n", len(forecast), location)
-		fmt.Println(report)
+		easterlyAnalysis := buildEasterlyAnalysis(forecast)
 
-		prompt := buildPrompt(location, forecast, report)
+		fmt.Printf("\n%d-day %s wind forecast (km/h):\n", len(forecast), location)
+		fmt.Println(report)
+		fmt.Println(easterlyAnalysis)
+
+		prompt := buildPrompt(location, forecast, report, easterlyAnalysis)
 		fmt.Println("\nPrompt sent to Ollama:\n----------------------")
 		fmt.Println(prompt)
 		fmt.Println("----------------------")
@@ -87,7 +90,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err != nil {
 			fmt.Printf("Ollama failed: %v\n", err)
 			if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-				err2 := sendTelegramMessage(&a.cfg, formatTelegramTable(report))
+				// Send table + easterly analysis as fallback
+				fallbackMsg := formatTelegramTable(report) + "\n" + easterlyAnalysis
+				err2 := sendTelegramMessage(&a.cfg, fallbackMsg)
 				if err2 != nil {
 					fmt.Printf("Failed to send Telegram message: %v\n", err2)
 				} else {
@@ -99,8 +104,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			fmt.Println(summary)
 			// Send to Telegram if configured
 			if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-				// First send the formatted table
-				err := sendTelegramMessage(&a.cfg, formatTelegramTable(report))
+				// First send the formatted table with easterly analysis
+				tableMsg := formatTelegramTable(report) + "\n" + easterlyAnalysis
+				err := sendTelegramMessage(&a.cfg, tableMsg)
 				if err != nil {
 					fmt.Printf("Failed to send wind table to Telegram: %v\n", err)
 				}
@@ -136,47 +142,73 @@ func formatTelegramTable(table string) string {
 
 func buildForecastTable(days []weather.ForecastDay) string {
 	var b strings.Builder
-	b.WriteString("Date        | Wind Max | Gust Max | Dir\n")
-	b.WriteString("------------+----------+---------+------\n")
+	b.WriteString("Date       | Wind | Dir | East\n")
+	b.WriteString("-----------+------+-----+-----\n")
 	for _, day := range days {
-		b.WriteString(fmt.Sprintf("%s | %8.1f | %7.1f | %s\n",
-			day.Date.Format("2006-01-02"),
+		eastMarker := "   "
+		if isEasterly(day.WindDirMean) {
+			eastMarker = " ✈️"
+		}
+		b.WriteString(fmt.Sprintf("%s | %4.0f | %-3s |%s\n",
+			day.Date.Format("Mon 02 Jan"),
 			day.WindSpeedMax,
-			day.WindGustMax,
 			degToCompass(day.WindDirMean),
+			eastMarker,
 		))
 	}
 	return b.String()
 }
 
-func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a very compact way:
-	- Predominant wind direction (just state "Predominant: E" or "W" or "N" etc.)
-	- List any significant wind direction changes with dates
-	- Highlight all periods with easterly winds (E, ENE, ESE, or SE) if any
-	- Keep it brief and suitable for a quick daily aviation risk check
+func buildPrompt(location string, _ []weather.ForecastDay, table string, easterlyAnalysis string) string {
+	return fmt.Sprintf(`%s wind forecast. Easterly wind = planes overhead (✈️).
 
-	Tabular data:
-	%s
-	`, location, table)
+%s
+%s
+Summarize briefly: how many easterly days and when does wind change direction?`, location, easterlyAnalysis, table)
 }
 
-// degToCompass converts degrees to simplified compass direction (N, S, E, W)
-// Prioritizes E/W over N/S - only shows N or S if wind is purely north/south
+// degToCompass converts degrees to E or W (what matters for flight paths)
 func degToCompass(deg float64) string {
-	// Normalize to 0-360
 	deg = float64(int(deg+360) % 360)
-
-	// Prioritize E/W: wider ranges for E and W
-	if deg >= 30 && deg < 150 {
+	// East: 0-180, West: 180-360
+	if deg > 0 && deg < 180 {
 		return "E"
-	} else if deg >= 210 && deg < 330 {
-		return "W"
-	} else if deg >= 150 && deg < 210 {
-		return "S"
-	} else {
-		return "N"
 	}
+	return "W"
+}
+
+// isEasterly returns true if wind is from the east
+func isEasterly(deg float64) bool {
+	deg = float64(int(deg+360) % 360)
+	return deg > 0 && deg < 180
+}
+
+// countEasterlyDays counts how many days have easterly winds
+func countEasterlyDays(days []weather.ForecastDay) int {
+	count := 0
+	for _, d := range days {
+		if isEasterly(d.WindDirMean) {
+			count++
+		}
+	}
+	return count
+}
+
+// buildEasterlyAnalysis creates a simple summary with dominant direction
+func buildEasterlyAnalysis(days []weather.ForecastDay) string {
+	eastCount := countEasterlyDays(days)
+	westCount := len(days) - eastCount
+
+	var dominant string
+	if eastCount > westCount {
+		dominant = "E ✈️"
+	} else if westCount > eastCount {
+		dominant = "W"
+	} else {
+		dominant = "Mixed"
+	}
+
+	return fmt.Sprintf("Dominant: %s | East: %d days | West: %d days\n", dominant, eastCount, westCount)
 }
 
 func fallbackLocation(name string) string {
