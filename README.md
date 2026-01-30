@@ -41,6 +41,24 @@ To receive the Ollama summary via Telegram, set the following environment variab
 - `TELEGRAM_TOKEN`: Your Telegram bot token
 - `TELEGRAM_CHAT_ID`: The chat ID to send messages to
 
+### How to get your Telegram Bot Token and Chat ID
+
+1. **Create a Telegram Bot:**
+   - Open Telegram and search for [@BotFather](https://t.me/BotFather)
+   - Start a chat and send `/newbot`
+   - Follow the instructions to set a name and username
+   - BotFather will reply with your **bot token** (save this for `TELEGRAM_TOKEN`)
+
+2. **Get your Chat ID:**
+   - Add your new bot to a group (if you want group notifications) or start a chat with it
+   - Send a message to the bot (or in the group)
+   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Look for `chat":{"id":...` in the JSON response; this is your **chat ID** (use for `TELEGRAM_CHAT_ID`)
+
+3. **Set these in your `.env` file:**
+   - `TELEGRAM_TOKEN=...`
+   - `TELEGRAM_CHAT_ID=...`
+
 You can use a `.env` file for convenience. Example:
 
 ```env
