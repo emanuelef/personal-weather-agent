@@ -93,15 +93,6 @@ func buildForecastTable(days []weather.ForecastDay) string {
 }
 
 func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	var prevDir string
-	for _, day := range days {
-		dir := degToCompass(day.WindDirMean)
-		if prevDir != "" && dir != prevDir {
-			// wind direction change, but not used
-		}
-		prevDir = dir
-	}
-
 	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way:
 - What is the main (predominant) wind direction?
 - On which dates does the wind direction change, and what is the new direction?
