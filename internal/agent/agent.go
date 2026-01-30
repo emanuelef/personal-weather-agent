@@ -93,14 +93,11 @@ func buildForecastTable(days []weather.ForecastDay) string {
 }
 
 func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	var windDirs []float64
-	var changes []string
 	var prevDir string
 	for _, day := range days {
 		dir := degToCompass(day.WindDirMean)
-		windDirs = append(windDirs, day.WindDirMean)
 		if prevDir != "" && dir != prevDir {
-			changes = append(changes, day.Date.Format("2006-01-02")+":"+dir)
+			// wind direction change, but not used
 		}
 		prevDir = dir
 	}
@@ -164,10 +161,13 @@ func sendTelegramMessage(config *Config, message string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send telegram message: %w", err)
 	}
-	defer resp.Body.Close()
+	errClose := resp.Body.Close()
+	if errClose != nil {
+		fmt.Printf("warning: close telegram response body: %v\n", errClose)
+	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Telegram API returned status %d", resp.StatusCode)
+		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
 	}
 
 	return nil
