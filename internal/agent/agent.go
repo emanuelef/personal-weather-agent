@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -142,13 +143,14 @@ func buildForecastTable(days []weather.ForecastDay) string {
 }
 
 func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way, and return the answer as a Markdown-formatted message suitable for Telegram:
+	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way:
 	- What is the main (predominant) wind direction?
 	- On which dates does the wind direction change, and what is the new direction?
 	- List all periods with easterly winds (E, ENE, ESE, or SE) and their dates.
 	- Output should be concise, suitable for a quick daily aviation risk check.
+	- Use simple formatting (no special characters that could break HTML/Markdown parsing).
 
-	Tabular data (format your answer for Telegram):
+	Tabular data:
 	%s
 	`, location, table)
 }
@@ -180,7 +182,7 @@ func sendTelegramMessage(config *Config, message string) error {
 	msg := TelegramMessage{
 		ChatID:    config.TelegramChatID,
 		Text:      message,
-		ParseMode: "Markdown",
+		ParseMode: "", // Send as plain text to avoid parsing errors
 	}
 
 	jsonData, err := json.Marshal(msg)
@@ -200,13 +202,11 @@ func sendTelegramMessage(config *Config, message string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send telegram message: %w", err)
 	}
-	errClose := resp.Body.Close()
-	if errClose != nil {
-		fmt.Printf("warning: close telegram response body: %v\n", errClose)
-	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram API returned status %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
