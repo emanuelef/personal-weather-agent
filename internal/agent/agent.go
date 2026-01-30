@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,54 +39,91 @@ func New(cfg Config) *Agent {
 }
 
 // Run executes one fetch-and-summarize pass.
+// Run runs the agent 24/7, fetching and sending once a day.
 func (a *Agent) Run(ctx context.Context) error {
-	if a.cfg.Weather == nil {
-		return fmt.Errorf("weather client is missing")
-	}
-	if a.cfg.Ollama == nil {
-		return fmt.Errorf("ollama client is missing")
-	}
+   // Get run time from env (default 10:00 UTC)
+   runHour := 10
+   runMinute := 0
+   if h := os.Getenv("WIND_CHECK_HOUR"); h != "" {
+	   if v, err := strconv.Atoi(h); err == nil && v >= 0 && v < 24 {
+		   runHour = v
+	   }
+   }
+   if m := os.Getenv("WIND_CHECK_MINUTE"); m != "" {
+	   if v, err := strconv.Atoi(m); err == nil && v >= 0 && v < 60 {
+		   runMinute = v
+	   }
+   }
+   for {
+	   select {
+	   case <-ctx.Done():
+		   return ctx.Err()
+	   default:
+	   }
 
-	forecast, err := a.cfg.Weather.Fetch(ctx, a.cfg.ForecastDays)
-	if err != nil {
-		return fmt.Errorf("fetch forecast: %w", err)
-	}
+	   if a.cfg.Weather == nil {
+		   return fmt.Errorf("weather client is missing")
+	   }
+	   if a.cfg.Ollama == nil {
+		   return fmt.Errorf("ollama client is missing")
+	   }
 
-	location := fallbackLocation(a.cfg.LocationName)
-	report := buildForecastTable(forecast)
-	fmt.Printf("%d-day %s wind forecast (km/h):\n", len(forecast), location)
-	fmt.Println(report)
+	   forecast, err := a.cfg.Weather.Fetch(ctx, a.cfg.ForecastDays)
+	   if err != nil {
+		   fmt.Printf("fetch forecast: %v\n", err)
+	   }
 
-	prompt := buildPrompt(location, forecast, report)
-	fmt.Println("\nPrompt sent to Ollama:\n----------------------")
-	fmt.Println(prompt)
-	fmt.Println("----------------------")
-	summary, err := a.cfg.Ollama.Generate(ctx, prompt)
-	if err != nil {
-		fmt.Printf("Ollama failed: %v\n", err)
-		if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-			err2 := sendTelegramMessage(&a.cfg, report)
-			if err2 != nil {
-				fmt.Printf("Failed to send Telegram message: %v\n", err2)
-				return fmt.Errorf("ollama summary: %w; telegram: %v", err, err2)
-			}
-			fmt.Println("Sent fallback wind table to Telegram.")
-			return nil
-		}
-		return fmt.Errorf("ollama summary: %w", err)
-	}
+	   location := fallbackLocation(a.cfg.LocationName)
+	   report := buildForecastTable(forecast)
+	   fmt.Printf("%d-day %s wind forecast (km/h):\n", len(forecast), location)
+	   fmt.Println(report)
 
-	fmt.Println("\nOllama summary:")
-	fmt.Println(summary)
+	   prompt := buildPrompt(location, forecast, report)
+	   fmt.Println("\nPrompt sent to Ollama:\n----------------------")
+	   fmt.Println(prompt)
+	   fmt.Println("----------------------")
+	   summary, err := a.cfg.Ollama.Generate(ctx, prompt)
+	   if err != nil {
+		   fmt.Printf("Ollama failed: %v\n", err)
+		   if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
+			   err2 := sendTelegramMessage(&a.cfg, formatTelegramTable(report))
+			   if err2 != nil {
+				   fmt.Printf("Failed to send Telegram message: %v\n", err2)
+			   } else {
+				   fmt.Println("Sent fallback wind table to Telegram.")
+			   }
+		   }
+	   } else {
+		   fmt.Println("\nOllama summary:")
+		   fmt.Println(summary)
+		   // Send to Telegram if configured
+		   if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
+			   err := sendTelegramMessage(&a.cfg, summary)
+			   if err != nil {
+				   fmt.Printf("Failed to send Telegram message: %v\n", err)
+			   }
+		   }
+	   }
 
-	// Send to Telegram if configured
-	if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-		err := sendTelegramMessage(&a.cfg, summary)
-		if err != nil {
-			fmt.Printf("Failed to send Telegram message: %v\n", err)
-		}
-	}
-	return nil
+	   // Sleep until the next configured run time (default 10:00 UTC)
+	   now := time.Now().UTC()
+	   next := time.Date(now.Year(), now.Month(), now.Day(), runHour, runMinute, 0, 0, time.UTC)
+	   if !now.Before(next) {
+		   next = next.Add(24 * time.Hour)
+	   }
+	   sleep := time.Until(next)
+	   fmt.Printf("Sleeping for %v until next run at %02d:%02d UTC...\n", sleep, runHour, runMinute)
+	   select {
+	   case <-ctx.Done():
+		   return ctx.Err()
+	   case <-time.After(sleep):
+	   }
+   }
+}
+
+// formatTelegramTable wraps the table in Markdown code block for Telegram
+func formatTelegramTable(table string) string {
+	return "```\n" + table + "```"
 }
 
 func buildForecastTable(days []weather.ForecastDay) string {
@@ -103,16 +142,15 @@ func buildForecastTable(days []weather.ForecastDay) string {
 }
 
 func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way:
-- What is the main (predominant) wind direction?
-- On which dates does the wind direction change, and what is the new direction?
-- List all periods with easterly winds (E, ENE, ESE, or SE) and their dates.
-- Output should be concise, suitable for a quick daily aviation risk check.
+	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way, and return the answer as a Markdown-formatted message suitable for Telegram:
+	- What is the main (predominant) wind direction?
+	- On which dates does the wind direction change, and what is the new direction?
+	- List all periods with easterly winds (E, ENE, ESE, or SE) and their dates.
+	- Output should be concise, suitable for a quick daily aviation risk check.
 
-Tabular data:
-%s
-
-`, location, table)
+	Tabular data (format your answer for Telegram):
+	%s
+	`, location, table)
 }
 
 // degToCompass converts degrees to compass direction (e.g., N, NE, E, etc.)
