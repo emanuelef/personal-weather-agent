@@ -20,8 +20,8 @@ const (
 )
 
 func main() {
- // Load .env file if present (for local development)
- _ = godotenv.Load()
+	// Load .env file if present (for local development)
+	_ = godotenv.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
