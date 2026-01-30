@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/emanuelefumagalli/test-agent/internal/ollama"
 	"github.com/emanuelefumagalli/test-agent/internal/weather"
@@ -11,10 +15,12 @@ import (
 
 // Config wires together the dependencies and runtime options for the agent.
 type Config struct {
-	LocationName string
-	ForecastDays int
-	Weather      weather.Forecaster
-	Ollama       *ollama.Client
+	LocationName   string
+	ForecastDays   int
+	Weather        weather.Forecaster
+	Ollama         *ollama.Client
+	TelegramToken  string
+	TelegramChatID string
 }
 
 // Agent coordinates the weather fetch and Ollama summarization.
@@ -57,6 +63,14 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	fmt.Println("\nOllama summary:")
 	fmt.Println(summary)
+
+	// Send to Telegram if configured
+	if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
+		err := sendTelegramMessage(&a.cfg, summary)
+		if err != nil {
+			fmt.Printf("Failed to send Telegram message: %v\n", err)
+		}
+	}
 	return nil
 }
 
@@ -130,4 +144,46 @@ func fallbackLocation(name string) string {
 		return "the target location"
 	}
 	return name
+}
+
+// TelegramMessage is the payload for Telegram API
+type TelegramMessage struct {
+	ChatID    string `json:"chat_id"`
+	Text      string `json:"text"`
+	ParseMode string `json:"parse_mode"`
+}
+
+func sendTelegramMessage(config *Config, message string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", config.TelegramToken)
+
+	msg := TelegramMessage{
+		ChatID:    config.TelegramChatID,
+		Text:      message,
+		ParseMode: "Markdown",
+	}
+
+	jsonData, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal telegram message: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create telegram request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send telegram message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Telegram API returned status %d", resp.StatusCode)
+	}
+
+	return nil
 }

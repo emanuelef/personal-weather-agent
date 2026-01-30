@@ -25,6 +25,48 @@ Configure via environment variables:
 | `OLLAMA_MODEL` | `llama3.1` | Ollama model to use |
 | `FORECAST_DAYS` | `15` | Number of forecast days (max 16) |
 
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in your secrets and configuration. The `.env` file is ignored by git and should not be committed.
+
+```bash
+cp .env.example .env
+# Edit .env and set your values
+```
+
+## Telegram Integration
+
+To receive the Ollama summary via Telegram, set the following environment variables:
+
+- `TELEGRAM_TOKEN`: Your Telegram bot token
+- `TELEGRAM_CHAT_ID`: The chat ID to send messages to
+
+You can use a `.env` file for convenience. Example:
+
+```env
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=llama3.2:3b
+FORECAST_DAYS=15
+TELEGRAM_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
+
+To run with Docker and .env:
+
+```bash
+docker run --rm --network host --env-file .env ghcr.io/emanuelef/test-agent:latest
+```
+
+Or set variables directly:
+
+```bash
+docker run --rm --network host \
+  -e TELEGRAM_TOKEN=your_telegram_bot_token \
+  -e TELEGRAM_CHAT_ID=your_telegram_chat_id \
+  -e OLLAMA_MODEL=llama3.2:3b \
+  ghcr.io/emanuelef/test-agent:latest
+```
+
 ## Local Development
 
 ```bash

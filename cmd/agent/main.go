@@ -34,6 +34,8 @@ func main() {
 			Host:  envOrDefault("OLLAMA_HOST", "http://127.0.0.1:11434"),
 			Model: envOrDefault("OLLAMA_MODEL", "llama3.1"),
 		},
+		TelegramToken:  os.Getenv("TELEGRAM_TOKEN"),
+		TelegramChatID: os.Getenv("TELEGRAM_CHAT_ID"),
 	})
 
 	if err := ag.Run(ctx); err != nil {
