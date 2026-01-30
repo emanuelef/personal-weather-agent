@@ -99,9 +99,13 @@ func (a *Agent) Run(ctx context.Context) error {
 			fmt.Println(summary)
 			// Send to Telegram if configured
 			if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-				// Escape Markdown special characters to prevent parsing errors
-				escapedSummary := escapeMarkdown(summary)
-				err := sendTelegramMessage(&a.cfg, escapedSummary)
+				// First send the formatted table
+				err := sendTelegramMessage(&a.cfg, formatTelegramTable(report))
+				if err != nil {
+					fmt.Printf("Failed to send wind table to Telegram: %v\n", err)
+				}
+				// Then send the Ollama summary
+				err = sendTelegramMessage(&a.cfg, summary)
 				if err != nil {
 					fmt.Printf("Failed to send Telegram message: %v\n", err)
 					// Don't crash, just log and continue
@@ -146,48 +150,33 @@ func buildForecastTable(days []weather.ForecastDay) string {
 }
 
 func buildPrompt(location string, days []weather.ForecastDay, table string) string {
-	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a compact way:
-	- What is the main (predominant) wind direction?
-	- On which dates does the wind direction change, and what is the new direction?
-	- List all periods with easterly winds (E, ENE, ESE, or SE) and their dates.
-	- Output should be concise, suitable for a quick daily aviation risk check.
-	- Use simple formatting (no special characters that could break HTML/Markdown parsing).
+	return fmt.Sprintf(`Summarize the next 15 days wind forecast for %s in a very compact way:
+	- Predominant wind direction (just state "Predominant: E" or "W" or "N" etc.)
+	- List any significant wind direction changes with dates
+	- Highlight all periods with easterly winds (E, ENE, ESE, or SE) if any
+	- Keep it brief and suitable for a quick daily aviation risk check
 
 	Tabular data:
 	%s
 	`, location, table)
 }
 
-// degToCompass converts degrees to compass direction (e.g., N, NE, E, etc.)
+// degToCompass converts degrees to simplified compass direction (N, S, E, W)
+// Prioritizes E/W over N/S - only shows N or S if wind is purely north/south
 func degToCompass(deg float64) string {
-	dirs := []string{"N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"}
-	idx := int((deg/22.5)+0.5) % 16
-	return dirs[idx]
-}
+	// Normalize to 0-360
+	deg = float64(int(deg+360) % 360)
 
-// escapeMarkdown escapes special characters for Telegram Markdown
-func escapeMarkdown(text string) string {
-	replacer := strings.NewReplacer(
-		"_", "\\_",
-		"*", "\\*",
-		"[", "\\[",
-		"]", "\\]",
-		"(", "\\(",
-		")", "\\)",
-		"~", "\\~",
-		"`", "\\`",
-		">", "\\>",
-		"#", "\\#",
-		"+", "\\+",
-		"-", "\\-",
-		"=", "\\=",
-		"|", "\\|",
-		"{", "\\{",
-		"}", "\\}",
-		".", "\\.",
-		"!", "\\!",
-	)
-	return replacer.Replace(text)
+	// Prioritize E/W: wider ranges for E and W
+	if deg >= 30 && deg < 150 {
+		return "E"
+	} else if deg >= 210 && deg < 330 {
+		return "W"
+	} else if deg >= 150 && deg < 210 {
+		return "S"
+	} else {
+		return "N"
+	}
 }
 
 func fallbackLocation(name string) string {
