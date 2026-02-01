@@ -166,12 +166,15 @@ func (a *Agent) doRainCheck(ctx context.Context) {
 
 	fmt.Printf("\n🌧️ %d-day %s rain forecast:\n%s%s\n", len(forecast), a.cfg.RainLocation, report, schoolRun)
 
-	prompt := fmt.Sprintf(`%s 7-day rain forecast. School run is 8-9am.
+	prompt := fmt.Sprintf(`%s 7-day rain forecast for school runs.
+Drop-off: 8-9am (weekdays)
+Pickup: 17-18 (Mon/Tue/Thu/Fri) or 15:15-16 (Wednesday early finish)
+Weekend: no school
 
 TODAY: %s
 
 %s
-Brief friendly summary: will it rain during school run today? Any rainy days this week?`, a.cfg.RainLocation, schoolRun, report)
+Brief friendly summary: umbrella needed today? Which days this week look rainy?`, a.cfg.RainLocation, schoolRun, report)
 
 	summary, err := a.cfg.Ollama.Generate(ctx, prompt)
 	msg := schoolRun + "\n" + formatTelegramTable(report)
@@ -192,37 +195,33 @@ func (a *Agent) sendTelegram(msg string) {
 
 func buildRainTable(days []weather.RainForecast) string {
 	var b strings.Builder
-	b.WriteString("Date       | Rain% | Drop | Pick\n")
-	b.WriteString("-----------+-------+------+------\n")
+	b.WriteString("Date       | Drop | Pick\n")
+	b.WriteString("-----------+------+------\n")
 	for _, day := range days {
 		weekday := day.Date.Weekday()
 
 		// Skip weekends
 		if weekday == time.Saturday || weekday == time.Sunday {
-			b.WriteString(fmt.Sprintf("%s | %4d%% |  --  |  -- \n",
-				day.Date.Format("Mon 02 Jan"),
-				day.PrecipProb,
-			))
+			b.WriteString(fmt.Sprintf("%s |  --  |  --\n", day.Date.Format("Mon 02 Jan")))
 			continue
 		}
 
 		dropProb := getHourProb(day, 8, 9)
 		pickProb := getPickupProb(day, weekday)
 
-		dropIcon := "   "
+		dropStr := fmt.Sprintf("%3d%%", dropProb)
 		if dropProb >= 30 {
-			dropIcon = " ☔"
+			dropStr = fmt.Sprintf("%2d%%☔", dropProb)
 		}
-		pickIcon := "   "
+		pickStr := fmt.Sprintf("%3d%%", pickProb)
 		if pickProb >= 30 {
-			pickIcon = " ☔"
+			pickStr = fmt.Sprintf("%2d%%☔", pickProb)
 		}
 
-		b.WriteString(fmt.Sprintf("%s | %4d%% |%s |%s\n",
+		b.WriteString(fmt.Sprintf("%s | %s | %s\n",
 			day.Date.Format("Mon 02 Jan"),
-			day.PrecipProb,
-			dropIcon,
-			pickIcon,
+			dropStr,
+			pickStr,
 		))
 	}
 	return b.String()
