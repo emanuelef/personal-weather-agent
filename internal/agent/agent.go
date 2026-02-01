@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,121 +16,306 @@ import (
 
 // Config wires together the dependencies and runtime options for the agent.
 type Config struct {
-	LocationName   string
-	ForecastDays   int
-	Weather        weather.Forecaster
+	// Wind check (Heathrow)
+	WindLocation string
+	WindDays     int
+	WindWeather  *weather.OpenMeteoClient
+	WindHour     int // UTC
+
+	// Rain check (Twickenham)
+	RainLocation string
+	RainDays     int
+	RainWeather  *weather.OpenMeteoClient
+	RainHour     int // London time
+
 	Ollama         *ollama.Client
 	TelegramToken  string
 	TelegramChatID string
 }
 
-// Agent coordinates the weather fetch and Ollama summarization.
+// Agent coordinates weather checks.
 type Agent struct {
 	cfg Config
 }
 
 // New returns a fully constructed Agent.
 func New(cfg Config) *Agent {
-	if cfg.ForecastDays <= 0 {
-		cfg.ForecastDays = 15
+	if cfg.WindDays <= 0 {
+		cfg.WindDays = 15
+	}
+	if cfg.RainDays <= 0 {
+		cfg.RainDays = 7
+	}
+	if cfg.WindHour == 0 {
+		cfg.WindHour = 10
+	}
+	if cfg.RainHour == 0 {
+		cfg.RainHour = 8
 	}
 	return &Agent{cfg: cfg}
 }
 
-// Run executes one fetch-and-summarize pass.
-// Run runs the agent 24/7, fetching and sending once a day.
+// Run starts both wind and rain checks concurrently.
 func (a *Agent) Run(ctx context.Context) error {
-	// Get run time from env (default 10:00 UTC)
-	runHour := 10
-	runMinute := 0
-	if h := os.Getenv("WIND_CHECK_HOUR"); h != "" {
-		if v, err := strconv.Atoi(h); err == nil && v >= 0 && v < 24 {
-			runHour = v
-		}
+	errCh := make(chan error, 2)
+
+	// Wind check goroutine (10am UTC)
+	go func() {
+		errCh <- a.runWindCheck(ctx)
+	}()
+
+	// Rain check goroutine (8am London)
+	go func() {
+		errCh <- a.runRainCheck(ctx)
+	}()
+
+	// Wait for either to fail or context cancel
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if m := os.Getenv("WIND_CHECK_MINUTE"); m != "" {
-		if v, err := strconv.Atoi(m); err == nil && v >= 0 && v < 60 {
-			runMinute = v
-		}
-	}
+}
+
+func (a *Agent) runWindCheck(ctx context.Context) error {
+	// Run immediately on startup
+	fmt.Println("🛫 Wind check: running now...")
+	a.doWindCheck(ctx)
+
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if a.cfg.Weather == nil {
-			return fmt.Errorf("weather client is missing")
-		}
-		if a.cfg.Ollama == nil {
-			return fmt.Errorf("ollama client is missing")
-		}
-
-		forecast, err := a.cfg.Weather.Fetch(ctx, a.cfg.ForecastDays)
-		if err != nil {
-			fmt.Printf("fetch forecast: %v\n", err)
-		}
-
-		location := fallbackLocation(a.cfg.LocationName)
-		report := buildForecastTable(forecast)
-		easterlyAnalysis := buildEasterlyAnalysis(forecast)
-
-		fmt.Printf("\n%d-day %s wind forecast (km/h):\n", len(forecast), location)
-		fmt.Println(report)
-		fmt.Println(easterlyAnalysis)
-
-		prompt := buildPrompt(location, forecast, report, easterlyAnalysis)
-		fmt.Println("\nPrompt sent to Ollama:\n----------------------")
-		fmt.Println(prompt)
-		fmt.Println("----------------------")
-		summary, err := a.cfg.Ollama.Generate(ctx, prompt)
-		if err != nil {
-			fmt.Printf("Ollama failed: %v\n", err)
-			if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-				// Send table + easterly analysis as fallback
-				fallbackMsg := formatTelegramTable(report) + "\n" + easterlyAnalysis
-				err2 := sendTelegramMessage(&a.cfg, fallbackMsg)
-				if err2 != nil {
-					fmt.Printf("Failed to send Telegram message: %v\n", err2)
-				} else {
-					fmt.Println("Sent fallback wind table to Telegram.")
-				}
-			}
-		} else {
-			fmt.Println("\nOllama summary:")
-			fmt.Println(summary)
-			// Send to Telegram if configured
-			if a.cfg.TelegramToken != "" && a.cfg.TelegramChatID != "" {
-				// First send the formatted table with easterly analysis
-				tableMsg := formatTelegramTable(report) + "\n" + easterlyAnalysis
-				err := sendTelegramMessage(&a.cfg, tableMsg)
-				if err != nil {
-					fmt.Printf("Failed to send wind table to Telegram: %v\n", err)
-				}
-				// Then send the Ollama summary
-				err = sendTelegramMessage(&a.cfg, summary)
-				if err != nil {
-					fmt.Printf("Failed to send Telegram message: %v\n", err)
-					// Don't crash, just log and continue
-				}
-			}
-		}
-
-		// Sleep until the next configured run time (default 10:00 UTC)
+		// Then sleep until next run (10am UTC)
 		now := time.Now().UTC()
-		next := time.Date(now.Year(), now.Month(), now.Day(), runHour, runMinute, 0, 0, time.UTC)
+		next := time.Date(now.Year(), now.Month(), now.Day(), a.cfg.WindHour, 0, 0, 0, time.UTC)
 		if !now.Before(next) {
 			next = next.Add(24 * time.Hour)
 		}
-		sleep := time.Until(next)
-		fmt.Printf("Sleeping for %v until next run at %02d:%02d UTC...\n", sleep, runHour, runMinute)
+		fmt.Printf("🛫 Wind check: next run at %s\n", next.Format("Mon 02 Jan 15:04 UTC"))
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(sleep):
+		case <-time.After(time.Until(next)):
+		}
+
+		a.doWindCheck(ctx)
+	}
+}
+
+func (a *Agent) doWindCheck(ctx context.Context) {
+	forecast, err := a.cfg.WindWeather.Fetch(ctx, a.cfg.WindDays)
+	if err != nil {
+		fmt.Printf("fetch wind forecast: %v\n", err)
+		return
+	}
+
+	report := buildForecastTable(forecast)
+	analysis := buildEasterlyAnalysis(forecast)
+
+	fmt.Printf("\n🛫 %d-day %s wind forecast:\n%s%s\n", len(forecast), a.cfg.WindLocation, report, analysis)
+
+	prompt := fmt.Sprintf(`%s wind forecast. Easterly wind = planes overhead (✈️).
+
+%s
+%s
+Summarize briefly: how many easterly days and when does wind change direction?`, a.cfg.WindLocation, analysis, report)
+
+	summary, err := a.cfg.Ollama.Generate(ctx, prompt)
+	msg := analysis + "\n" + formatTelegramTable(report)
+	if err == nil {
+		msg += "\n" + summary
+	}
+	a.sendTelegram(msg)
+}
+
+func (a *Agent) runRainCheck(ctx context.Context) error {
+	london, _ := time.LoadLocation("Europe/London")
+
+	// Run immediately on startup
+	fmt.Println("🌧️ Rain check: running now...")
+	a.doRainCheck(ctx)
+
+	for {
+		// Then sleep until next run (8am London)
+		now := time.Now().In(london)
+		next := time.Date(now.Year(), now.Month(), now.Day(), a.cfg.RainHour, 0, 0, 0, london)
+		if !now.Before(next) {
+			next = next.Add(24 * time.Hour)
+		}
+		fmt.Printf("🌧️ Rain check: next run at %s\n", next.Format("Mon 02 Jan 15:04 MST"))
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Until(next)):
+		}
+
+		a.doRainCheck(ctx)
+	}
+}
+
+func (a *Agent) doRainCheck(ctx context.Context) {
+	forecast, err := a.cfg.RainWeather.FetchRain(ctx, a.cfg.RainDays)
+	if err != nil {
+		fmt.Printf("fetch rain forecast: %v\n", err)
+		return
+	}
+
+	report := buildRainTable(forecast)
+	schoolRun := analyzeSchoolRun(forecast)
+
+	fmt.Printf("\n🌧️ %d-day %s rain forecast:\n%s%s\n", len(forecast), a.cfg.RainLocation, report, schoolRun)
+
+	prompt := fmt.Sprintf(`%s 7-day rain forecast. School run is 8-9am.
+
+TODAY: %s
+
+%s
+Brief friendly summary: will it rain during school run today? Any rainy days this week?`, a.cfg.RainLocation, schoolRun, report)
+
+	summary, err := a.cfg.Ollama.Generate(ctx, prompt)
+	msg := schoolRun + "\n" + formatTelegramTable(report)
+	if err == nil {
+		msg += "\n" + summary
+	}
+	a.sendTelegram(msg)
+}
+
+func (a *Agent) sendTelegram(msg string) {
+	if a.cfg.TelegramToken == "" || a.cfg.TelegramChatID == "" {
+		return
+	}
+	if err := sendTelegramMessage(a.cfg.TelegramToken, a.cfg.TelegramChatID, msg); err != nil {
+		fmt.Printf("Telegram failed: %v\n", err)
+	}
+}
+
+func buildRainTable(days []weather.RainForecast) string {
+	var b strings.Builder
+	b.WriteString("Date       | Rain% | Drop | Pick\n")
+	b.WriteString("-----------+-------+------+------\n")
+	for _, day := range days {
+		weekday := day.Date.Weekday()
+
+		// Skip weekends
+		if weekday == time.Saturday || weekday == time.Sunday {
+			b.WriteString(fmt.Sprintf("%s | %4d%% |  --  |  -- \n",
+				day.Date.Format("Mon 02 Jan"),
+				day.PrecipProb,
+			))
+			continue
+		}
+
+		dropProb := getHourProb(day, 8, 9)
+		pickProb := getPickupProb(day, weekday)
+
+		dropIcon := "   "
+		if dropProb >= 30 {
+			dropIcon = " ☔"
+		}
+		pickIcon := "   "
+		if pickProb >= 30 {
+			pickIcon = " ☔"
+		}
+
+		b.WriteString(fmt.Sprintf("%s | %4d%% |%s |%s\n",
+			day.Date.Format("Mon 02 Jan"),
+			day.PrecipProb,
+			dropIcon,
+			pickIcon,
+		))
+	}
+	return b.String()
+}
+
+func getHourProb(day weather.RainForecast, startHour, endHour int) int {
+	if len(day.MorningRainProb) == 0 {
+		return day.PrecipProb
+	}
+	// MorningRainProb covers hours 6,7,8,9,10 (indices 0,1,2,3,4)
+	maxProb := 0
+	for i := startHour - 6; i <= endHour-6 && i < len(day.MorningRainProb); i++ {
+		if i >= 0 && day.MorningRainProb[i] > maxProb {
+			maxProb = day.MorningRainProb[i]
 		}
 	}
+	if maxProb == 0 {
+		return day.PrecipProb
+	}
+	return maxProb
+}
+
+func getPickupProb(day weather.RainForecast, weekday time.Weekday) int {
+	// AfternoonProb covers hours 15,16,17,18 (indices 0,1,2,3)
+	if len(day.AfternoonProb) == 0 {
+		return day.PrecipProb
+	}
+
+	var maxProb int
+	if weekday == time.Wednesday {
+		// Wednesday: 15:15-16:00 (indices 0,1)
+		for i := 0; i <= 1 && i < len(day.AfternoonProb); i++ {
+			if day.AfternoonProb[i] > maxProb {
+				maxProb = day.AfternoonProb[i]
+			}
+		}
+	} else {
+		// Other days: 17:00-18:00 (indices 2,3)
+		for i := 2; i <= 3 && i < len(day.AfternoonProb); i++ {
+			if day.AfternoonProb[i] > maxProb {
+				maxProb = day.AfternoonProb[i]
+			}
+		}
+	}
+
+	if maxProb == 0 {
+		return day.PrecipProb
+	}
+	return maxProb
+}
+
+func analyzeSchoolRun(days []weather.RainForecast) string {
+	if len(days) == 0 {
+		return "No forecast data"
+	}
+	today := days[0]
+	weekday := today.Date.Weekday()
+
+	// Weekend - no school
+	if weekday == time.Saturday || weekday == time.Sunday {
+		return "📅 Weekend - no school!"
+	}
+
+	dropProb := getHourProb(today, 8, 9)
+	pickProb := getPickupProb(today, weekday)
+
+	// Pickup time info
+	pickTime := "17-18"
+	if weekday == time.Wednesday {
+		pickTime = "15:15-16"
+	}
+
+	var result strings.Builder
+
+	// Drop-off analysis
+	if dropProb >= 70 {
+		result.WriteString(fmt.Sprintf("☔ DROP-OFF (8-9am): %d%% - Umbrella!\n", dropProb))
+	} else if dropProb >= 30 {
+		result.WriteString(fmt.Sprintf("🌦️ DROP-OFF (8-9am): %d%% - Maybe umbrella\n", dropProb))
+	} else {
+		result.WriteString(fmt.Sprintf("☀️ DROP-OFF (8-9am): %d%%\n", dropProb))
+	}
+
+	// Pickup analysis
+	if pickProb >= 70 {
+		result.WriteString(fmt.Sprintf("☔ PICKUP (%s): %d%% - Umbrella!", pickTime, pickProb))
+	} else if pickProb >= 30 {
+		result.WriteString(fmt.Sprintf("🌦️ PICKUP (%s): %d%% - Maybe umbrella", pickTime, pickProb))
+	} else {
+		result.WriteString(fmt.Sprintf("☀️ PICKUP (%s): %d%%", pickTime, pickProb))
+	}
+
+	return result.String()
 }
 
 // formatTelegramTable wraps the table in Markdown code block for Telegram
@@ -225,11 +408,11 @@ type TelegramMessage struct {
 	ParseMode string `json:"parse_mode"`
 }
 
-func sendTelegramMessage(config *Config, message string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", config.TelegramToken)
+func sendTelegramMessage(token, chatID, message string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 
 	msg := TelegramMessage{
-		ChatID:    config.TelegramChatID,
+		ChatID:    chatID,
 		Text:      message,
 		ParseMode: "Markdown",
 	}
