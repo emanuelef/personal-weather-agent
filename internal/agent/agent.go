@@ -133,7 +133,12 @@ Summarize briefly: how many easterly days and when does wind change direction?`,
 }
 
 func (a *Agent) runRainCheck(ctx context.Context) error {
-	london, _ := time.LoadLocation("Europe/London")
+	// Load London location, fallback to UTC if not available
+	london, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		fmt.Printf("warning: could not load London location, using UTC: %v\n", err)
+		london = time.UTC
+	}
 
 	// Run immediately on startup
 	fmt.Println("🌧️ Rain check: running now...")
