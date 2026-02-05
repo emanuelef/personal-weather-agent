@@ -36,10 +36,10 @@ func main() {
 			Longitude: heathrowLongitude,
 		},
 
-		// Rain check at 8am London time
+		// Rain check at 7:30am London time
 		RainLocation: "Twickenham",
 		RainDays:     7,
-		RainHour:     8,
+		RainHour:     7,
 		RainWeather: &weather.OpenMeteoClient{
 			Latitude:  twickenhamLatitude,
 			Longitude: twickenhamLongitude,

@@ -68,7 +68,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		errCh <- a.runWindCheck(ctx)
 	}()
 
-	// Rain check goroutine (8am London)
+	// Rain check goroutine (7:30am London)
 	go func() {
 		errCh <- a.runRainCheck(ctx)
 	}()
@@ -140,18 +140,13 @@ func (a *Agent) runRainCheck(ctx context.Context) error {
 		london = time.UTC
 	}
 
-	// Run immediately on startup
-	fmt.Println("🌧️ Rain check: running now...")
-	a.doRainCheck(ctx)
-
 	for {
-		// Then sleep until next run (7:30am London)
 		now := time.Now().In(london)
 		next := time.Date(now.Year(), now.Month(), now.Day(), a.cfg.RainHour, a.cfg.RainMinute, 0, 0, london)
 		if !now.Before(next) {
 			next = next.Add(24 * time.Hour)
 		}
-		fmt.Printf("🌧️ Rain check: next run at %s\n", next.Format("Mon 02 Jan 15:04 MST"))
+		fmt.Printf("🌧️ Rain check: next run at %s (London) / %s (UTC)\n", next.Format("Mon 02 Jan 15:04 MST"), next.UTC().Format("15:04 UTC"))
 
 		select {
 		case <-ctx.Done():
@@ -159,6 +154,7 @@ func (a *Agent) runRainCheck(ctx context.Context) error {
 		case <-time.After(time.Until(next)):
 		}
 
+		fmt.Println("🌧️ Rain check: running now...")
 		a.doRainCheck(ctx)
 	}
 }
